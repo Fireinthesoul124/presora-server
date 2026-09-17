@@ -9,7 +9,9 @@ const app = express();
 
 app.use(helmet());
 app.use(cors());
-app.use(express.json());
+// Images arrive as base64 in the JSON body (not multipart — see the client's
+// lib/imageEncoding.ts for why), so the default 100kb limit is far too small.
+app.use(express.json({ limit: '25mb' }));
 
 app.get('/health', (_req, res) => res.json({ ok: true }));
 

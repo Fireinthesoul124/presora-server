@@ -1,5 +1,4 @@
 import { Router } from 'express';
-import multer from 'multer';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma';
 import { requireAuth, type AuthedRequest } from '../middleware/requireAuth';
@@ -10,7 +9,15 @@ import type { Medicine, Prescription } from '@prisma/client';
 export const prescriptionsRouter = Router();
 prescriptionsRouter.use(requireAuth);
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { files: 5, fileSize: 15 * 1024 * 1024 } });
+// Images arrive as base64 in the JSON body, not multipart — see the client's
+// lib/imageEncoding.ts for why (Expo SDK 57's fetch doesn't support React
+// Native's classic FormData file shape).
+const UploadSchema = z.object({
+  images: z
+    .array(z.object({ data: z.string().min(1), contentType: z.string().default('image/jpeg') }))
+    .min(1)
+    .max(5),
+});
 
 function toMedicineDTO(m: Medicine) {
   return {
@@ -61,16 +68,20 @@ prescriptionsRouter.get('/:id', async (req, res) => {
   res.json(toPrescriptionDTO(p));
 });
 
-/** FR-2.1/FR-2.2: accepts up to 5 photos, runs Claude Haiku 4.5 extraction (lib/claudeExtraction.ts). */
-prescriptionsRouter.post('/upload', upload.array('pages', 5), async (req, res) => {
+/** FR-2.1/FR-2.2: accepts up to 5 photos (base64 JSON), runs Claude Haiku 4.5 extraction (lib/claudeExtraction.ts). */
+prescriptionsRouter.post('/upload', async (req, res) => {
   const userId = (req as unknown as AuthedRequest).userId;
-  const files = req.files as Express.Multer.File[] | undefined;
-  if (!files || files.length === 0) return res.status(400).json({ message: 'No pages uploaded' });
+  const parsed = UploadSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ message: 'No pages uploaded' });
+
+  const buffers = parsed.data.images.map((img) => Buffer.from(img.data, 'base64'));
 
   const imageUrls: string[] = [];
   if (isStorageConfigured()) {
     try {
-      for (const file of files) imageUrls.push(await uploadImage(userId, file.buffer, file.mimetype));
+      for (let i = 0; i < buffers.length; i += 1) {
+        imageUrls.push(await uploadImage(userId, buffers[i], parsed.data.images[i].contentType));
+      }
     } catch (err) {
       console.error('[prescriptions] R2 upload failed, continuing without persisted images:', err);
     }
@@ -79,7 +90,7 @@ prescriptionsRouter.post('/upload', upload.array('pages', 5), async (req, res) =
   }
 
   try {
-    const extracted = await extractPrescriptionFromImages(files.map((f) => f.buffer));
+    const extracted = await extractPrescriptionFromImages(buffers);
 
     const created = await prisma.prescription.create({
       data: {
