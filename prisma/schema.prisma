@@ -1,0 +1,97 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  patient
+  caregiver
+  admin
+}
+
+enum PrescriptionStatus {
+  processing
+  awaiting_confirmation
+  active
+  completed
+  archived
+  rejected
+}
+
+model User {
+  id             String    @id @default(uuid())
+  email          String    @unique
+  passwordHash   String
+  name           String
+  phone          String?
+  role           UserRole  @default(patient)
+  emailVerified  Boolean   @default(false)
+  verifyCode     String?
+  verifyExpires  DateTime?
+  photoUrl       String?
+
+  // Stored as JSON to mirror the client's UserProfile shape exactly
+  // (lib/api/types.ts) without a wall of extra columns.
+  reminderTimes     Json     @default("{\"morning\":\"08:00\",\"afternoon\":\"13:00\",\"night\":\"21:00\"}")
+  notificationPrefs Json     @default("{\"push\":true,\"sms\":false,\"whatsapp\":false}")
+  escalation        Json     @default("{\"secondReminderMinutes\":30,\"caregiverAlertMinutes\":60}")
+  conditions        String[] @default([])
+  allergies         String[] @default([])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  refreshTokens RefreshToken[]
+  prescriptions Prescription[]
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+model Prescription {
+  id          String             @id @default(uuid())
+  userId      String
+  user        User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status      PrescriptionStatus @default(processing)
+  images      String[]           @default([])
+  doctorName  String?
+  createdAt   DateTime           @default(now())
+  startedAt   DateTime?
+
+  medicines Medicine[]
+
+  @@index([userId])
+}
+
+model Medicine {
+  id               String       @id @default(uuid())
+  prescriptionId   String
+  prescription     Prescription @relation(fields: [prescriptionId], references: [id], onDelete: Cascade)
+  medicineName     String
+  strength         String       @default("")
+  dosePattern      String       @default("0-0-0")
+  timing           String[]     @default([])
+  foodInstruction  String       @default("any time")
+  quantity         Int          @default(1)
+  quantityUnit     String       @default("tablet")
+  durationDays     Int          @default(1)
+  specialNotes     String?
+  indication       String?
+  confidence       Json         @default("{}")
+  needsVerification Boolean     @default(false)
+  warnings         String[]     @default([])
+
+  @@index([prescriptionId])
+}
